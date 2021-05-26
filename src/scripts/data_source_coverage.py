@@ -13,27 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# A script to detect all pipelines declared in pipelines/ and cache/ and
-# dump a summary of their configurations within a `tmp/` folder in the
-# project root.
-#
-# Example usage: `python src/scripts/list_pipelines.py`
-
 import sys
 import os
-import json
 from functools import partial
-from google.cloud.storage import Blob
 from pandas import DataFrame
 from tqdm import tqdm
 
 path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(path)
 
-from lib.concurrent import process_map, thread_map
-from lib.constants import SRC, GCS_BUCKET_TEST
+from lib.concurrent import thread_map
+from lib.constants import GCS_BUCKET_TEST
 from lib.data_source import DataSource
-from lib.io import read_table, temporary_directory
+from lib.io import temporary_directory
 from lib.gcloud import get_storage_bucket
 from lib.memory_efficient import get_table_columns, table_read_column
 from lib.pipeline import DataPipeline
