@@ -362,9 +362,9 @@ class DataSource(ErrorLogger):
             str: A uuid which can be used to uniquely identify this data source + config
         """
         data_source_class = self.__class__
-        configs = self.config.items()
-        config_invariant = ("test", "automation")
-        data_source_config = str({key: val for key, val in configs if key not in config_invariant})
+        data_source_config = dict(name=self.config["class"], **self.config)
+        for key in ("name", "test", "automation"):
+            data_source_config.pop(key)
         source_full_name = f"{data_source_class.__module__}.{data_source_class.__name__}"
-        hash_name = f"{table_name}.{source_full_name}.{data_source_config}"
+        hash_name = f"{table_name}.{source_full_name}.{str(data_source_config)}"
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, hash_name))

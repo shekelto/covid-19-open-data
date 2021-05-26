@@ -56,13 +56,13 @@ def read_source_output(data_pipeline: DataPipeline, data_source: DataSource) -> 
             }
         except Exception as exc:
             print(exc, file=sys.stderr)
-            return []
+            return {}
 
 
 def get_source_outputs(data_pipelines: Iterable[DataPipeline]) -> Iterable[Dict]:
     """Map a list of pipeline names to their source configs."""
 
-    for data_pipeline in tqdm(list(data_pipelines)):
+    for data_pipeline in tqdm(list(data_pipelines), desc="Processing data pipelines"):
         # print(f"Processing {data_pipeline.name}")
         map_iter = data_pipeline.data_sources
         map_func = partial(read_source_output, data_pipeline)
@@ -76,4 +76,4 @@ if __name__ == "__main__":
     # > $env:GCS_SERVICE_ACCOUNT = "github-open-covid-19@appspot.gserviceaccount.com"
     # > $env:GCP_TOKEN = $(gcloud auth application-default print-access-token)
     results = DataFrame(get_source_outputs(get_pipelines()))
-    results.to_csv(index=False)
+    print(results.to_csv(index=False))
