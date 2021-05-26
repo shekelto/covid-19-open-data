@@ -807,53 +807,54 @@ def publish_versions(prod_folder: str = "v2") -> Response:
 
 
 @profiled_route("/publish_sources")
-def publish_sources() -> Response:
+def publish_sources(table_name: str = None) -> Response:
     """ Publishes a table with the data source of each data point """
 
-    # Go through each table individually
+    table_name = _get_request_param("table", table_name)
+    logger.log_info(f"Tracing data sources for {table_name}")
+    pipeline = DataPipeline.load(table_name.replace("_", "-"))
+
     with temporary_directory() as workdir:
-        for pipeline in get_pipelines():
-            logger.log_info(f"Tracing data sources for {pipeline.table}")
 
-            # Download the combined table and all the intermediate files used to create it
-            download_folder(GCS_BUCKET_PROD, "v2", workdir, lambda x: x.stem == pipeline.table)
-            logger.log_info("Downloaded combined table")
-            combined_table = read_table(workdir / f"{pipeline.table}.csv")
-            logger.log_info("Loaded combined table")
-            intermediate_tables = list(load_intermediate_tables(pipeline))
-            intermediate_tables = list(reversed(intermediate_tables))
-            logger.log_info("Loaded intermediate tables")
+        # Download the combined table and all the intermediate files used to create it
+        download_folder(GCS_BUCKET_PROD, "v2", workdir, lambda x: x.stem == pipeline.table)
+        logger.log_info("Downloaded combined table")
+        combined_table = read_table(workdir / f"{pipeline.table}.csv")
+        logger.log_info("Loaded combined table")
+        intermediate_tables = list(load_intermediate_tables(pipeline))
+        intermediate_tables = list(reversed(intermediate_tables))
+        logger.log_info("Loaded intermediate tables")
 
-            # Make sure all the tables have the appropriate index
-            index_columns = ["key"] + (["date"] if "date" in combined_table.columns else [])
-            combined_table.set_index(index_columns, inplace=True)
-            for data_source, table in intermediate_tables:
-                table.set_index(index_columns, inplace=True)
+        # Make sure all the tables have the appropriate index
+        index_columns = ["key"] + (["date"] if "date" in combined_table.columns else [])
+        combined_table.set_index(index_columns, inplace=True)
+        for data_source, table in intermediate_tables:
+            table.set_index(index_columns, inplace=True)
 
-            # Iterate over the indices for each column independently
-            source_map: List[Dict[str, str]] = []
-            map_opts = dict(total=len(combined_table), desc="Records")
-            for idx, record in pbar(combined_table.iterrows(), **map_opts):
-                record_sources: Dict[str, str] = {}
-                for col in combined_table.columns:
-                    value = record[col]
-                    if isna(value):
-                        # If the record is NaN, data source is NaN too
-                        # Technically a data source could output NaN values, but we don't care here
-                        record_sources[col] = None
-                    else:
-                        # Otherwise iterate over each intermediate result in order until a match
-                        # for the value is found
-                        for data_source, table in intermediate_tables:
-                            if table.loc[idx, col] == value:
-                                record_sources[col] = data_source.name
-                                break
+        # Iterate over the indices for each column independently
+        source_map: List[Dict[str, str]] = []
+        map_opts = dict(total=len(combined_table), desc="Records")
+        for idx, record in pbar(combined_table.iterrows(), **map_opts):
+            record_sources: Dict[str, str] = {}
+            for col in combined_table.columns:
+                value = record[col]
+                if isna(value):
+                    # If the record is NaN, data source is NaN too
+                    # Technically a data source could output NaN values, but we don't care here
+                    record_sources[col] = None
+                else:
+                    # Otherwise iterate over each intermediate result in order until a match
+                    # for the value is found
+                    for data_source, table in intermediate_tables:
+                        if table.loc[idx, col] == value:
+                            record_sources[col] = data_source.name
+                            break
 
-                source_map.append(record_sources)
+            source_map.append(record_sources)
 
-            # Create a table with the source map
-            source_table = DataFrame(source_map, index=combined_table.index)
-            export_csv(source_table, workdir / f"{pipeline.table}.sources.csv")
+        # Create a table with the source map
+        source_table = DataFrame(source_map, index=combined_table.index)
+        export_csv(source_table, workdir / f"{pipeline.table}.sources.csv")
 
         # Upload to root folder
         upload_folder(GCS_BUCKET_TEST, "tmp", workdir, lambda x: x.name.endswith(".sources.csv"))
