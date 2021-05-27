@@ -66,6 +66,7 @@ from lib.data_source import DataSource
 from lib.error_logger import ErrorLogger
 from lib.gcloud import (
     delete_instance,
+    download_file,
     get_internal_ip,
     get_storage_bucket,
     start_instance_from_image,
@@ -817,44 +818,37 @@ def publish_sources(table_name: str = None) -> Response:
     with temporary_directory() as workdir:
 
         # Download the combined table and all the intermediate files used to create it
-        download_folder(GCS_BUCKET_PROD, "v2", workdir, lambda x: x.stem == pipeline.table)
-        logger.log_info("Downloaded combined table")
-        combined_table = read_table(workdir / f"{pipeline.table}.csv")
-        logger.log_info("Loaded combined table")
-        intermediate_tables = list(load_intermediate_tables(pipeline))
-        intermediate_tables = list(reversed(intermediate_tables))
-        logger.log_info("Loaded intermediate tables")
-
-        # Make sure all the tables have the appropriate index
+        logger.log_info("Downloading combined table")
+        output_path = workdir / f"{pipeline.table}.csv"
+        download_file(GCS_BUCKET_PROD, f"v2/{pipeline.table}.csv", output_path)
+        combined_table = read_table(output_path)
         index_columns = ["key"] + (["date"] if "date" in combined_table.columns else [])
         combined_table.set_index(index_columns, inplace=True)
-        for data_source, table in intermediate_tables:
-            table.set_index(index_columns, inplace=True)
 
-        # Iterate over the indices for each column independently
-        source_map: List[Dict[str, str]] = []
-        map_opts = dict(total=len(combined_table), desc="Records")
-        for idx, record in pbar(combined_table.iterrows(), **map_opts):
-            record_sources: Dict[str, str] = {}
-            for col in combined_table.columns:
-                value = record[col]
-                if isna(value):
-                    # If the record is NaN, data source is NaN too
-                    # Technically a data source could output NaN values, but we don't care here
-                    record_sources[col] = None
-                else:
-                    # Otherwise iterate over each intermediate result in order until a match
-                    # for the value is found
-                    for data_source, table in intermediate_tables:
-                        if table.loc[idx, col] == value:
-                            record_sources[col] = data_source.name
-                            break
+        intermediate_tables = []
+        for data_source in pbar(pipeline.data_sources, desc="Loading intermediate tables"):
+            fname = data_source.uuid(pipeline.table) + ".csv"
+            try:
+                download_file(GCS_BUCKET_TEST, f"intermediate/{fname}", workdir / fname)
+                table = read_table(workdir / fname).groupby(index_columns).last()
+                intermediate_tables.append((data_source, table))
+            except:
+                logger.log_info(f"Intermediate table not found: {fname}", file=sys.stderr)
 
-            source_map.append(record_sources)
+        # Iterate over the individual intermediate tables looking for the last non-null value
+        source_map = {idx: {} for idx in combined_table.index}
+        for data_source, table in pbar(intermediate_tables, desc="Building source map"):
+            for idx, row in table.iterrows():
+                if idx not in source_map:
+                    # If the intermediate table was *just* updated some values may not be found in
+                    # the combined table yet.
+                    continue
+                for col in filter(lambda col: not isna(row[col]), table.columns):
+                    source_map[idx][col] = data_source.name
 
         # Create a table with the source map
-        source_table = DataFrame(source_map, index=combined_table.index)
-        export_csv(source_table, workdir / f"{pipeline.table}.sources.csv")
+        source_table = DataFrame(source_map.values(), index=source_map.keys())
+        export_csv(source_table.reset_index(), workdir / f"{pipeline.table}.sources.csv")
 
         # Upload to root folder
         upload_folder(GCS_BUCKET_TEST, "tmp", workdir, lambda x: x.name.endswith(".sources.csv"))

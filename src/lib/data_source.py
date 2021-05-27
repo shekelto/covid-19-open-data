@@ -362,8 +362,10 @@ class DataSource(ErrorLogger):
             str: A uuid which can be used to uniquely identify this data source + config
         """
         data_source_class = self.__class__
-        data_source_config = dict(name=self.config["class"], **self.config)
-        for key in ("name", "test", "automation"):
+        # data_source_config = dict(name=self.config["class"], **self.config)
+        data_source_config = dict(self.config)
+        # for key in ("name", "test", "automation"):
+        for key in ("test", "automation"):
             data_source_config.pop(key)
         source_full_name = f"{data_source_class.__module__}.{data_source_class.__name__}"
         hash_name = f"{table_name}.{source_full_name}.{str(data_source_config)}"
